@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "database-generator": {
+      "command": "node",
+      "args": ["build/index.js"],
+      "cwd": ".",
+      "env": {}
+    }
+  }
+}
