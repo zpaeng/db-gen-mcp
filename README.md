@@ -15,6 +15,20 @@
 
 </div>
 
+## 📈 Star 历史
+
+<div align="center">
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zpaeng/db-gen-mcp&type=Date)](https://star-history.com/#zpaeng/db-gen-mcp&Date)
+
+### 🏆 项目指标
+![GitHub stars](https://img.shields.io/github/stars/zpaeng/db-gen-mcp?style=for-the-badge&logo=github&color=yellow)
+![GitHub forks](https://img.shields.io/github/forks/zpaeng/db-gen-mcp?style=for-the-badge&logo=github&color=blue)
+![GitHub watchers](https://img.shields.io/github/watchers/zpaeng/db-gen-mcp?style=for-the-badge&logo=github&color=green)
+![GitHub contributors](https://img.shields.io/github/contributors/zpaeng/db-gen-mcp?style=for-the-badge&logo=github&color=orange)
+
+</div>
+
 ---
 
 ## 📋 目录
