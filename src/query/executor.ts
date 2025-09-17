@@ -31,7 +31,7 @@ export class QueryExecutor {
     tableName: string,
     data: Record<string, QueryParameter>
   ): Promise<QueryResult<T>> {
-    const { query, params } = QueryBuilder.buildInsert(tableName, data);
+    const { query, params } = QueryBuilder.buildInsert(tableName, data, this.config.type);
     return this.executeQuery<T>(query, params);
   }
 
@@ -71,7 +71,8 @@ export class QueryExecutor {
       throw new Error('Update operation requires both data and criteria.');
     }
 
-    const { query, params } = QueryBuilder.buildUpdate(tableName, data, criteria);
+    const { query, params } = QueryBuilder.buildUpdate(tableName, data, criteria, this.config.type);
+    
     return this.executeQuery<T>(query, params);
   }
 
@@ -83,7 +84,7 @@ export class QueryExecutor {
       throw new Error('Delete operation requires criteria.');
     }
 
-    const { query, params } = QueryBuilder.buildDelete(tableName, criteria);
+    const { query, params } = QueryBuilder.buildDelete(tableName, criteria, this.config.type);
     return this.executeQuery<T>(query, params);
   }
 

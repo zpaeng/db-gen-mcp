@@ -218,7 +218,7 @@ export class QueryBuilder {
           if (!Array.isArray(condition.value)) {
             throw new Error(`${condition.operator} requires an array value`);
           }
-          const placeholders = condition.value.map(() => '?').join(', ');
+          const placeholders = condition.value.map(() => this.getParameterPlaceholder(params.length + 1)).join(', ');
           params.push(...condition.value);
           return `${field} ${condition.operator} (${placeholders})`;
         
@@ -227,19 +227,56 @@ export class QueryBuilder {
           if (!Array.isArray(condition.value) || condition.value.length !== 2) {
             throw new Error(`${condition.operator} requires exactly two values`);
           }
+          const placeholder1 = this.getParameterPlaceholder(params.length + 1);
+          const placeholder2 = this.getParameterPlaceholder(params.length + 2);
           params.push(condition.value[0], condition.value[1]);
-          return `${field} ${condition.operator} ? AND ?`;
+          return `${field} ${condition.operator} ${placeholder1} AND ${placeholder2}`;
         
         default:
+          const placeholder = this.getParameterPlaceholder(params.length + 1);
           params.push(condition.value as QueryParameter);
-          return `${field} ${condition.operator} ?`;
+          return `${field} ${condition.operator} ${placeholder}`;
       }
     }).join(' AND ');
   }
 
+  private getParameterPlaceholder(index: number): string {
+    switch (this.dbType) {
+      case 'postgresql':
+        return `$${index}`;
+      case 'mssql':
+        return `@param${index}`;
+      case 'oracle':
+        return `:param${index}`;
+      default:
+        return '?';
+    }
+  }
+
   private escapeIdentifier(identifier: string): string {
+    // Handle wildcard separately
+    if (identifier === '*') {
+      return '*';
+    }
+
+    // Handle SQL functions and expressions (like COUNT(*) as total)
+    if (identifier.includes('(') || identifier.toLowerCase().includes(' as ')) {
+      return identifier; // Return as-is for SQL functions and expressions
+    }
+
     // 移除潜在的SQL注入字符并转义标识符
-    const cleaned = identifier.replace(/[^\w\$]/g, '');
+    const cleaned = identifier.replace(/[^\w\$.]/g, ''); // Allow dots for table.column syntax
+
+    // 检查清理后的标识符是否为空
+    if (!cleaned || cleaned.trim() === '') {
+      throw new Error(`Invalid identifier: '${identifier}' - identifier cannot be empty after sanitization`);
+    }
+
+    // Handle cases like "table.column"
+    if (cleaned.includes('.')) {
+      return cleaned.split('.').map(part => this.escapeIdentifier(part)).join('.');
+    }
+
     switch (this.dbType) {
       case 'mysql':
         return `\`${cleaned}\``;
@@ -257,16 +294,31 @@ export class QueryBuilder {
   }
 
   // 安全的静态方法
-  static buildInsert(table: string, data: Record<string, QueryParameter>): QueryBuildResult {
+  static buildInsert(table: string, data: Record<string, QueryParameter>, dbType: DatabaseType = 'mysql'): QueryBuildResult {
     const keys = Object.keys(data);
     const values = Object.values(data);
-    const placeholders = keys.map(() => '?').join(', ');
-    const escapedKeys = keys.map(key => `\`${key.replace(/[^\w\$]/g, '')}\``);
-    const query = `INSERT INTO \`${table.replace(/[^\w\$]/g, '')}\` (${escapedKeys.join(', ')}) VALUES (${placeholders})`;
+    const placeholders = keys.map((_, index) => QueryBuilder.getParameterPlaceholderStatic(index + 1, dbType)).join(', ');
+    
+    // 验证并转义表名和字段名
+    const cleanTable = table.replace(/[^\w\$]/g, '');
+    if (!cleanTable) {
+      throw new Error(`Invalid table name: '${table}' - table name cannot be empty after sanitization`);
+    }
+    
+    const escapedKeys = keys.map(key => {
+      const cleanKey = key.replace(/[^\w\$]/g, '');
+      if (!cleanKey) {
+        throw new Error(`Invalid column name: '${key}' - column name cannot be empty after sanitization`);
+      }
+      return QueryBuilder.escapeIdentifierStatic(cleanKey, dbType);
+    });
+    
+    const escapedTable = QueryBuilder.escapeIdentifierStatic(cleanTable, dbType);
+    const query = `INSERT INTO ${escapedTable} (${escapedKeys.join(', ')}) VALUES (${placeholders})`;
     return { query, params: values };
   }
 
-  static buildUpdate(table: string, data: Record<string, QueryParameter>, criteria: Record<string, QueryParameter>): QueryBuildResult {
+  static buildUpdate(table: string, data: Record<string, QueryParameter>, criteria: Record<string, QueryParameter>, dbType: DatabaseType = 'mysql'): QueryBuildResult {
     const dataKeys = Object.keys(data);
     const criteriaKeys = Object.keys(criteria);
 
@@ -274,24 +326,110 @@ export class QueryBuilder {
       throw new Error('Update operation requires both data and criteria.');
     }
 
-    const setClause = dataKeys.map(key => `\`${key.replace(/[^\w\$]/g, '')}\` = ?`).join(', ');
-    const whereClause = criteriaKeys.map(key => `\`${key.replace(/[^\w\$]/g, '')}\` = ?`).join(' AND ');
-    const query = `UPDATE \`${table.replace(/[^\w\$]/g, '')}\` SET ${setClause} WHERE ${whereClause}`;
+    // 验证并转义表名
+    const cleanTable = table.replace(/[^\w\$]/g, '');
+    if (!cleanTable) {
+      throw new Error(`Invalid table name: '${table}' - table name cannot be empty after sanitization`);
+    }
+
+    let paramIndex = 1;
+    const setClause = dataKeys.map(key => {
+      const cleanKey = key.replace(/[^\w\$]/g, '');
+      if (!cleanKey) {
+        throw new Error(`Invalid column name: '${key}' - column name cannot be empty after sanitization`);
+      }
+      const escaped = QueryBuilder.escapeIdentifierStatic(cleanKey, dbType);
+      const placeholder = QueryBuilder.getParameterPlaceholderStatic(paramIndex++, dbType);
+      return `${escaped} = ${placeholder}`;
+    }).join(', ');
+    
+    const whereConditions = criteriaKeys.map(key => {
+      const cleanKey = key.replace(/[^\w\$]/g, '');
+      if (!cleanKey) {
+        throw new Error(`Invalid column name: '${key}' - column name cannot be empty after sanitization`);
+      }
+      const escaped = QueryBuilder.escapeIdentifierStatic(cleanKey, dbType);
+      const placeholder = QueryBuilder.getParameterPlaceholderStatic(paramIndex++, dbType);
+      return `${escaped} = ${placeholder}`;
+    });
+    
+    const whereClause = whereConditions.length > 0 ? whereConditions.join(' AND ') : '';
+    
+    const escapedTable = QueryBuilder.escapeIdentifierStatic(cleanTable, dbType);
+    
+    let query = `UPDATE ${escapedTable} SET ${setClause}`;
+    
+    if (whereClause) {
+      query += ` WHERE ${whereClause}`;
+    }
+    
     const params = [...Object.values(data), ...Object.values(criteria)];
 
     return { query, params };
   }
 
-  static buildDelete(table: string, criteria: Record<string, QueryParameter>): QueryBuildResult {
+  static buildDelete(table: string, criteria: Record<string, QueryParameter>, dbType: DatabaseType = 'mysql'): QueryBuildResult {
     const keys = Object.keys(criteria);
     if (keys.length === 0) {
       throw new Error('Delete operation requires criteria.');
     }
-    const whereClause = keys.map(key => `\`${key.replace(/[^\w\$]/g, '')}\` = ?`).join(' AND ');
-    const query = `DELETE FROM \`${table.replace(/[^\w\$]/g, '')}\` WHERE ${whereClause}`;
+    
+    // 验证并转义表名
+    const cleanTable = table.replace(/[^\w\$]/g, '');
+    if (!cleanTable) {
+      throw new Error(`Invalid table name: '${table}' - table name cannot be empty after sanitization`);
+    }
+    
+    const whereClause = keys.map((key, index) => {
+      const cleanKey = key.replace(/[^\w\$]/g, '');
+      if (!cleanKey) {
+        throw new Error(`Invalid column name: '${key}' - column name cannot be empty after sanitization`);
+      }
+      const placeholder = QueryBuilder.getParameterPlaceholderStatic(index + 1, dbType);
+      return `${QueryBuilder.escapeIdentifierStatic(cleanKey, dbType)} = ${placeholder}`;
+    }).join(' AND ');
+    
+    const escapedTable = QueryBuilder.escapeIdentifierStatic(cleanTable, dbType);
+    const query = `DELETE FROM ${escapedTable} WHERE ${whereClause}`;
     const params = Object.values(criteria);
 
     return { query, params };
+  }
+
+  // 静态版本的标识符转义方法
+  private static escapeIdentifierStatic(identifier: string, dbType: DatabaseType): string {
+    if (!identifier || identifier.trim() === '') {
+      throw new Error(`Invalid identifier: identifier cannot be empty`);
+    }
+    
+    switch (dbType) {
+      case 'mysql':
+        return `\`${identifier}\``;
+      case 'postgresql':
+        return `"${identifier}"`;
+      case 'mssql':
+        return `[${identifier}]`;
+      case 'oracle':
+        return `"${identifier.toUpperCase()}"`;
+      case 'sqlite':
+        return `\`${identifier}\``;
+      default:
+        return `\`${identifier}\``;
+    }
+  }
+
+  // 静态版本的参数占位符方法
+  private static getParameterPlaceholderStatic(index: number, dbType: DatabaseType): string {
+    switch (dbType) {
+      case 'postgresql':
+        return `$${index}`;
+      case 'mssql':
+        return `@param${index}`;
+      case 'oracle':
+        return `:param${index}`;
+      default:
+        return '?';
+    }
   }
 
   // 查询安全检查
